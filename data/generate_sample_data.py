@@ -1,3 +1,5 @@
+# messy data-handler
+
 """Generate a synthetic bank-transaction dataset for the finance categorizer."""
 import csv
 import random
