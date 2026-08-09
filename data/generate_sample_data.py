@@ -1,6 +1,21 @@
 # messy data-handler
 
-"""Generate a synthetic bank-transaction dataset for the finance categorizer."""
+"""Generate a synthetic bank-transaction dataset for the finance categorizer.
+
+v2: v1's model learned to associate the surface pattern "#NNNN CITY STATE"
+with Groceries, because Groceries examples disproportionately used that
+format. Real Shopping (Target, Sephora) and Transport (Hertz) transactions
+share that same formatting and got misclassified as a result.
+
+v2 fixes this two ways:
+  1. Every category now mixes several description formats (with/without
+     store numbers, with/without city+state, processor-prefixed, etc.)
+     instead of leaning on one dominant shape.
+  2. A handful of merchants across DIFFERENT categories deliberately share
+     the exact same "#NNNN CITY STATE" (or "#NNNN") suffix, so the model
+     is forced to key off the merchant name rather than the surrounding
+     number/city noise.
+"""
 import csv
 import random
 from datetime import date, timedelta
@@ -11,11 +26,10 @@ random.seed(42)
 OUTPUT_PATH = Path(__file__).parent / "sample_transactions.csv"
 
 START_DATE = date(2026, 5, 1)
-END_DATE = date(2026, 7, 31)
+END_DATE = date(2026, 8, 31)
 
-# (description template pool, amount range, sign) per category.
-# Templates use realistic bank-statement noise: store numbers, city/state,
-# POS/ACH prefixes, card processor tags, inconsistent casing.
+# (merchant pool, amount range) per category. Pools deliberately mix
+# formats: some "#NNNN CITY STATE", some bare names, some processor-prefixed.
 CATEGORY_TEMPLATES = {
     "Groceries": {
         "amount_range": (-120, -15),
@@ -28,6 +42,12 @@ CATEGORY_TEMPLATES = {
             "ALDI 71029 CHICAGO IL",
             "PUBLIX #1187 ORLANDO FL",
             "VONS #2214 LOS ANGELES CA",
+            "WHOLE FOODS MARKET",
+            "SPROUTS FARMERS MKT",
+            "H MART GROCERY",
+            "GROCERY OUTLET BARGAIN MKT",
+            "STOP & SHOP #3391 BOSTON MA",
+            "FOOD LION #1145 SAN DIEGO CA",
         ],
     },
     "Dining": {
@@ -41,6 +61,11 @@ CATEGORY_TEMPLATES = {
             "DOORDASH*WINGSTOP SAN FRANCISCO CA",
             "UBER *EATS HELP.UBER.COM",
             "PANERA BREAD #601934 DALLAS TX",
+            "FIVE GUYS #1145 SAN DIEGO CA",
+            "GRUBHUB*ORDER CHICAGO IL",
+            "OLIVE GARDEN #4409 PHOENIX AZ",
+            "IN-N-OUT BURGER #221",
+            "SUBWAY #8821 AUSTIN TX",
         ],
     },
     "Rent": {
@@ -50,6 +75,14 @@ CATEGORY_TEMPLATES = {
             "ONLINE PMT BLUEROCK PROPERTIES LLC",
             "RENT PAYMENT AVALON BAY COMMUNITIES",
             "ACH DEBIT IRVINE COMPANY APTS",
+            "ZELLE PMT TO LANDLORD J RIVERA",
+            "ACH DEBIT EQUITY RESIDENTIAL",
+            "RENT PAYMENT CAMDEN PROPERTY TRUST",
+            "ONLINE PMT MAA APARTMENTS",
+            "ACH DEBIT UDR COMMUNITIES",
+            "RENT PAYMENT ESSEX PROPERTY TRUST",
+            "ACH DEBIT MID-AMERICA APT MGMT",
+            "ONLINE PMT AIMCO PROPERTIES",
         ],
     },
     "Subscriptions": {
@@ -62,6 +95,15 @@ CATEGORY_TEMPLATES = {
             "HULU 877-830-4858 CA",
             "NYTIMES*SUBSCRIPTION 800-698-4637",
             "ADOBE  *CREATIVE CLD SAN JOSE CA",
+            "DISNEY PLUS 888-905-7888 CA",
+            "YOUTUBE PREMIUM GOOGLE.COM CA",
+            "PATREON* MEMBERSHIP SF CA",
+            "PELOTON MEMBERSHIP NYC NY",
+            "DROPBOX*SUBSCRIPTION SF CA",
+            "PLANET FITNESS #0921 DALLAS TX",
+            "AUDIBLE.COM SEATTLE WA",
+            "SIRIUSXM RADIO SVC",
+            "MASTERCLASS ANNUAL PLAN",
         ],
     },
     "Transport": {
@@ -74,6 +116,13 @@ CATEGORY_TEMPLATES = {
             "BART CLIPPER RELOAD SAN FRANCISCO CA",
             "METRO TRANSIT FARE MINNEAPOLIS MN",
             "76 - GAS STATION #3221",
+            "ENTERPRISE RENT-A-CAR",
+            "SPOTHERO PARKING SAN FRANCISCO CA",
+            "ARCO AMPM #5521 OAKLAND CA",
+            "EXXON 88213 MAIN ST",
+            "CITY PARKING GARAGE #12",
+            "SOUTHWEST.COM RESERVATIONS TX",
+            "DELTA.COM 800-221-1212 GA",
         ],
     },
     "Entertainment": {
@@ -85,6 +134,13 @@ CATEGORY_TEMPLATES = {
             "REGAL CINEMAS 0421 NEW YORK NY",
             "DAVE & BUSTERS #0087 DALLAS TX",
             "TOP GOLF #0412 AUSTIN TX",
+            "BOWLERO #2291 CHICAGO IL",
+            "SPOTIFY LIVE EVENTS SF CA",
+            "PLAYSTATION NETWORK SONY CA",
+            "XBOX LIVE MICROSOFT WA",
+            "SIX FLAGS MAGIC MTN VALENCIA CA",
+            "COMEDY CLUB DOWNTOWN LA",
+            "MUSEUM OF MODERN ART NYC NY",
         ],
     },
     "Utilities": {
@@ -96,6 +152,14 @@ CATEGORY_TEMPLATES = {
             "ACH DEBIT CITY WATER UTILITY",
             "VERIZON WIRELESS PAYMENTS",
             "WASTE MGMT #4471 AUTOPAY",
+            "T-MOBILE AUTOPAY 800-937-8997",
+            "SPECTRUM PAYMENT CHARTER COMM",
+            "XCEL ENERGY BILLPAY",
+            "ACH DEBIT SEWER UTILITY DIST",
+            "CONSOLIDATED EDISON NYC NY",
+            "NATIONAL GRID UTILITY BILLPAY",
+            "CRICKET WIRELESS #3221",
+            "ACH DEBIT GAS UTILITY CO",
         ],
     },
     "Shopping": {
@@ -109,6 +173,13 @@ CATEGORY_TEMPLATES = {
             "HOME DEPOT #4409 PHOENIX AZ",
             "TJ MAXX #0872 DENVER CO",
             "ETSY.COM - MERCH BROOKLYN NY",
+            "MACY'S #0231 CHICAGO IL",
+            "ULTA BEAUTY #4471 SAN DIEGO CA",
+            "ROSS DRESS FOR LESS",
+            "GAMESTOP #0093 AUSTIN TX",
+            "PETCO ANIMAL SUPPLIES",
+            "ZAPPOS.COM 800-927-7671 NV",
+            "WAYFAIR.COM ONLINE ORDER",
         ],
     },
     "Income": {
@@ -120,6 +191,14 @@ CATEGORY_TEMPLATES = {
             "ACH CREDIT INTUIT QB PAYROLL SVC",
             "VENMO CASHOUT DEPOSIT",
             "ACH CREDIT STATE OF CA REFUND",
+            "ZELLE DEPOSIT FROM CLIENT",
+            "ACH CREDIT FREELANCE PAYMENT",
+            "DIRECT DEP SOCIAL SECURITY ADMIN",
+            "ACH CREDIT DIVIDEND PAYMENT",
+            "INTEREST PAYMENT SAVINGS",
+            "ACH CREDIT TAX REFUND IRS",
+            "CASH APP*DEPOSIT",
+            "CASH APP*DIRECT DEPOSIT",
         ],
     },
     "Other": {
@@ -132,31 +211,46 @@ CATEGORY_TEMPLATES = {
             "WIRE TRANSFER FEE",
             "MISC DEBIT ADJUSTMENT",
             "CASH APP*TRANSFER",
+            "NOTARY SERVICE FEE",
+            "BANK MAINTENANCE FEE",
+            "FOREIGN TXN FEE",
+            "MONEYGRAM TRANSFER",
+            "WESTERN UNION TRANSFER",
+            "LATE PAYMENT FEE",
         ],
     },
 }
 
 # One-off / rare merchants that appear exactly once each, sprinkled into
-# categories to simulate "never seen before" merchants.
+# categories to simulate "never seen before" merchants. Kept out of the
+# main description pools above so they can't be repeated by random.choice.
 RARE_MERCHANTS = [
-    ("Shopping", "REI CO-OP #0033 BOULDER CO", -134.20),
+    ("Shopping", "IKEA", -212.40),
     ("Dining", "SQ *POKE BOWL TRUCK SD", -14.75),
     ("Entertainment", "ESCAPE ROOM SD DOWNTOWN", -42.00),
     ("Other", "DMV RENEWAL FEE SACRAMENTO CA", -58.00),
-    ("Transport", "AMTRAK .COM 800-872-7245", -89.50),
-    ("Shopping", "SEPHORA #1029 SAN DIEGO CA", -47.30),
+    ("Transport", "ZIPCAR MEMBERSHIP FEE", -9.00),
+    ("Groceries", "WINN-DIXIE", -54.20),
+    ("Utilities", "SIMPLE MOBILE AUTOPAY", -45.00),
+    ("Income", "STRIPE PAYOUT TRANSFER", 612.40),
 ]
 
 # Intentional outliers: (category, description, amount) — statistically
 # unusual within their category, for testing anomaly detection later.
+# HERTZ (Transport) vs ULTA BEAUTY (Shopping) below share the exact same
+# "#4471 SAN DIEGO CA" suffix on purpose.
 OUTLIERS = [
     ("Dining", "TST* CHEF'S TASTING ROOM LA JOLLA CA", -280.00),
     ("Groceries", "WHOLEFDS MKT 10345 -- CATERING ORDER", -410.00),
     ("Transport", "HERTZ RENT-A-CAR #4471 SAN DIEGO CA", -610.00),
+    ("Shopping", "ULTA BEAUTY #4471 SAN DIEGO CA", -540.00),
     ("Subscriptions", "APPLE.COM/BILL 866-712-7753 CA", -899.00),
+    ("Rent", "ACH DEBIT GREYSTAR MGMT RENT", -3200.00),
+    ("Income", "DIRECT DEP EMPLOYER DISBURSEMENT", 150.00),
+    ("Utilities", "COMCAST CABLE COMM 800-934-6489", -410.00),
 ]
 
-TARGET_PER_CATEGORY = 18
+TARGET_PER_CATEGORY = 50
 CATEGORIES = list(CATEGORY_TEMPLATES.keys())
 
 
@@ -172,7 +266,6 @@ def random_amount(low, high):
 def build_rows():
     rows = []
 
-    # Reserve slots for rare merchants and outliers, fill the rest normally.
     rare_by_cat = {}
     for cat, desc, amt in RARE_MERCHANTS:
         rare_by_cat.setdefault(cat, []).append((desc, amt))
