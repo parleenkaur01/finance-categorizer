@@ -1,0 +1,10 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.DS_Store
+*.egg-info/
+.ipynb_checkpoints/
+.streamlit/secrets.toml
+data/real_bank.csv
