@@ -1,16 +1,14 @@
 """Streamlit dashboard for the AI-Powered Personal Finance Tracker."""
 from __future__ import annotations
 
-from pathlib import Path
-
+import altair as alt
 import pandas as pd
 import streamlit as st
 
 from src.anomaly import detect_anomalies
-from src.loaders import load_transactions_file, load_transactions_upload
-from src.predict import categorize_transactions, load_model
+from src.loaders import load_transactions_upload
+from src.predict import MODEL_PATH, categorize_transactions, load_model
 
-SAMPLE_CSV = Path("data/sample_transactions.csv")
 SAMPLE_PDF_HINT = "Upload a bank/credit statement (.csv or .pdf)"
 
 
@@ -21,14 +19,10 @@ st.set_page_config(
 )
 
 st.title("AI-Powered Personal Finance Tracker")
-st.caption(
-    "Upload a bank CSV or credit-statement PDF → categorize with keyword rules + "
-    "TF-IDF/Logistic Regression → flag unusual spending."
-)
 
 
 @st.cache_resource
-def get_model():
+def get_model(mtime: float):
     return load_model()
 
 
@@ -49,6 +43,92 @@ def monthly_spend(df: pd.DataFrame) -> pd.DataFrame:
     return expenses.groupby("month", as_index=False)["spend"].sum()
 
 
+def expenses_only(df: pd.DataFrame) -> pd.DataFrame:
+    return df[df["amount"] < 0].copy()
+
+
+def money(value: float) -> str:
+    return f"${value:,.2f}"
+
+
+_CARD_PAYMENT = (
+    "PAYMENT - THANK YOU",
+    "PAYMENT THANK YOU",
+    "AUTOPAY PAYMENT",
+)
+
+
+def is_card_payment(description: str) -> bool:
+    text = str(description).upper()
+    return any(token in text for token in _CARD_PAYMENT)
+
+
+def refunds_only(df: pd.DataFrame) -> pd.DataFrame:
+    credits = df[df["amount"] > 0].copy()
+    if credits.empty:
+        return credits
+    return credits[~credits["description"].map(is_card_payment)]
+
+
+def category_from_chart(event) -> str | None:
+    if event is None:
+        return None
+    selection = getattr(event, "selection", None)
+    if selection is None and isinstance(event, dict):
+        selection = event.get("selection")
+    if selection is None:
+        return None
+
+    candidates = []
+    if isinstance(selection, dict):
+        candidates.extend(selection.values())
+    for attr in ("pick", "point"):
+        value = getattr(selection, attr, None)
+        if value is not None:
+            candidates.append(value)
+
+    for points in candidates:
+        if isinstance(points, list) and points:
+            first = points[0]
+            if isinstance(first, dict) and first.get("category"):
+                return first.get("category")
+        if isinstance(points, dict) and points.get("category"):
+            return points.get("category")
+    return None
+
+
+def render_purchases(rows: pd.DataFrame) -> None:
+    show = rows.sort_values("date", ascending=False)[
+        ["date", "description", "amount"]
+    ].copy()
+    show["date"] = pd.to_datetime(show["date"]).dt.strftime("%b %d, %Y")
+    show["amount"] = show["amount"].abs().map(money)
+    show = show.rename(
+        columns={
+            "date": "Date purchased",
+            "description": "What you bought",
+            "amount": "Amount",
+        }
+    )
+    st.dataframe(show, use_container_width=True, hide_index=True)
+
+
+def render_credits(rows: pd.DataFrame) -> None:
+    show = rows.sort_values("date", ascending=False)[
+        ["date", "description", "amount"]
+    ].copy()
+    show["date"] = pd.to_datetime(show["date"]).dt.strftime("%b %d, %Y")
+    show["amount"] = show["amount"].map(money)
+    show = show.rename(
+        columns={
+            "date": "Date",
+            "description": "Description",
+            "amount": "Amount",
+        }
+    )
+    st.dataframe(show, use_container_width=True, hide_index=True)
+
+
 with st.sidebar:
     st.header("Data source")
     uploaded = st.file_uploader(
@@ -56,13 +136,6 @@ with st.sidebar:
         type=["csv", "pdf"],
         help="CSV needs date / description / amount columns. "
         "PDFs: Robinhood-style statements with Tran/Post date rows.",
-    )
-    use_sample = st.button("Use sample CSV", use_container_width=True)
-
-    st.divider()
-    st.markdown(
-        "**Model:** TF-IDF (1–2 grams) + Logistic Regression  \n"
-        "**Anomalies:** median / IQR per category (threshold = 2.0)"
     )
 
 df = None
@@ -73,13 +146,6 @@ try:
     if uploaded is not None:
         df = load_transactions_upload(uploaded.name, uploaded.getvalue())
         source_label = uploaded.name
-    elif use_sample or SAMPLE_CSV.exists():
-        if use_sample or uploaded is None:
-            # Default to sample on first load so the dashboard isn't empty.
-            if use_sample or "bootstrapped" not in st.session_state:
-                df = load_transactions_file(SAMPLE_CSV)
-                source_label = str(SAMPLE_CSV)
-                st.session_state["bootstrapped"] = True
 except Exception as exc:  # noqa: BLE001 — surface parse errors in UI
     error = str(exc)
 
@@ -88,10 +154,10 @@ if error:
     st.stop()
 
 if df is None or df.empty:
-    st.info("Upload a `.csv` or `.pdf` statement, or click **Use sample CSV**.")
+    st.info("Upload a `.csv` or `.pdf` statement to get started.")
     st.stop()
 
-model = get_model()
+model = get_model(MODEL_PATH.stat().st_mtime)
 # If the file already has labels (sample data), keep them for comparison,
 # but still run the model into predicted_category.
 labeled = "category" in df.columns
@@ -112,72 +178,93 @@ st.success(f"Loaded **{len(df)}** transactions from `{source_label}`.")
 
 # KPI row
 expenses = df.loc[df["amount"] < 0, "amount"].abs().sum()
-income = df.loc[df["amount"] > 0, "amount"].sum()
+refunds = refunds_only(df)
+refunds_total = float(refunds["amount"].sum()) if not refunds.empty else 0.0
 n_anom = int(df["is_amount_anomaly"].sum())
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Transactions", f"{len(df)}")
 c2.metric("Total spending", f"${expenses:,.2f}")
-c3.metric("Total credits / income", f"${income:,.2f}")
-c4.metric("Amount anomalies", f"{n_anom}")
+c3.metric("Refunds", money(refunds_total))
+c4.metric("Unusual purchases", f"{n_anom}")
+
+with st.expander(
+    f"Refunds  ·  {money(refunds_total)}  ·  "
+    f"{len(refunds)} item{'s' if len(refunds) != 1 else ''}"
+):
+    if refunds.empty:
+        st.caption("No refunds in this statement.")
+    else:
+        render_credits(refunds)
 
 if labeled:
     acc = df["correct"].mean()
     st.metric("Model accuracy vs file labels", f"{acc:.1%}")
 
-tab_overview, tab_txns, tab_anom = st.tabs(
-    ["Overview", "Transactions", "Anomalies"]
-)
-
-with tab_overview:
-    left, right = st.columns(2)
-    with left:
-        st.subheader("Spending by category")
-        by_cat = spending_by_category(df)
-        st.bar_chart(by_cat.set_index("category"))
-    with right:
-        st.subheader("Spending over time")
-        by_month = monthly_spend(df)
-        if not by_month.empty:
-            st.bar_chart(by_month.set_index("month"))
-        else:
-            st.write("No expense rows to chart.")
-
-with tab_txns:
-    st.subheader("Categorized transactions")
-    show_cols = ["date", "description", "amount", "predicted_category", "category_source"]
-    if labeled:
-        show_cols.extend(["category", "correct"])
-    show_cols.extend(["is_amount_anomaly", "is_new_merchant"])
-    st.dataframe(
-        df[show_cols].sort_values("date"),
-        use_container_width=True,
-        hide_index=True,
-    )
-
-with tab_anom:
-    st.subheader("Flagged amount outliers")
-    anom = df[df["is_amount_anomaly"]].sort_values(
-        "amount_anomaly_score", ascending=False
-    )
-    if anom.empty:
-        st.write("No amount anomalies flagged.")
-    else:
-        st.dataframe(
-            anom[
-                [
-                    "date",
-                    "description",
-                    "category",
-                    "amount",
-                    "amount_anomaly_score",
-                ]
+st.subheader("Spending by category")
+st.caption("Click a category to see every purchase.")
+by_cat = spending_by_category(df)
+if by_cat.empty:
+    st.write("No purchases to chart.")
+else:
+    pick = alt.selection_point(fields=["category"], name="pick")
+    chart = (
+        alt.Chart(by_cat)
+        .mark_bar()
+        .encode(
+            x=alt.X("category:N", sort="-y", title=None),
+            y=alt.Y("spend:Q", title="Spent", axis=alt.Axis(format="$,.0f")),
+            color=alt.condition(pick, alt.value("#176b52"), alt.value("#8eb9a8")),
+            tooltip=[
+                alt.Tooltip("category:N", title="Category"),
+                alt.Tooltip("spend:Q", title="Spent", format="$,.2f"),
             ],
-            use_container_width=True,
-            hide_index=True,
         )
+        .add_params(pick)
+        .properties(height=320)
+    )
+    event = st.altair_chart(chart, on_select="rerun", use_container_width=True)
+    picked = category_from_chart(event)
+    if picked:
+        st.session_state["picked_category"] = picked
+    selected = st.session_state.get("picked_category")
 
-    st.subheader("First-time merchants")
-    new_m = df[df["is_new_merchant"]][
-        ["date", "description", "predicted_category", "amount"]
-    ]
-    st.dataframe(new_m, use_container_width=True, hide_index=True)
+    for _, row in by_cat.iterrows():
+        category = row["category"]
+        spent = float(row["spend"])
+        purchases = expenses_only(df)
+        purchases = purchases[purchases["category"] == category]
+        label = f"{category}  ·  {money(spent)}  ·  {len(purchases)} purchase{'s' if len(purchases) != 1 else ''}"
+        with st.expander(label, expanded=(selected == category)):
+            if purchases.empty:
+                st.caption("No purchases in this category.")
+            else:
+                render_purchases(purchases)
+
+st.subheader("Spending over time")
+by_month = monthly_spend(df)
+if not by_month.empty:
+    st.bar_chart(by_month.set_index("month"))
+else:
+    st.write("No expense rows to chart.")
+
+with st.expander("Anomalies"):
+    st.subheader("Unusual purchases")
+    anom = df[df["is_amount_anomaly"]].sort_values("amount")
+    if anom.empty:
+        st.write("No purchases over the category limits.")
+    else:
+        anom_show = anom[
+            ["date", "description", "category", "amount", "anomaly_reason"]
+        ].copy()
+        anom_show["date"] = pd.to_datetime(anom_show["date"]).dt.strftime("%b %d, %Y")
+        anom_show["amount"] = anom_show["amount"].abs().map(money)
+        anom_show = anom_show.rename(
+            columns={
+                "date": "Date purchased",
+                "description": "What you bought",
+                "category": "Category",
+                "amount": "Amount",
+                "anomaly_reason": "Why",
+            }
+        )
+        st.dataframe(anom_show, use_container_width=True, hide_index=True)

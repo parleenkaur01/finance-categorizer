@@ -16,13 +16,16 @@ from src.categorizer import match_keyword_category
 MODEL_PATH = Path(__file__).resolve().parent / "model.pkl"
 
 _model = None
+_model_mtime = None
 
 
 def load_model(path: str | Path | None = None):
-    global _model
+    global _model, _model_mtime
     model_path = Path(path) if path else MODEL_PATH
-    if _model is None or path is not None:
+    mtime = model_path.stat().st_mtime
+    if _model is None or path is not None or _model_mtime != mtime:
         _model = joblib.load(model_path)
+        _model_mtime = mtime
     return _model
 
 

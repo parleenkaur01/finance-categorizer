@@ -34,3 +34,23 @@ def load_transactions_upload(filename: str, raw_bytes: bytes) -> pd.DataFrame:
         finally:
             Path(tmp_path).unlink(missing_ok=True)
     raise ValueError(f"Unsupported file type '{suffix}'. Upload a .csv or .pdf.")
+
+
+def load_transactions_uploads(files: list[tuple[str, bytes]]) -> pd.DataFrame:
+    """Load and stack several statement files. Tags each row with source_file."""
+    frames = []
+    errors = []
+    for filename, raw_bytes in files:
+        try:
+            frame = load_transactions_upload(filename, raw_bytes)
+            frame["source_file"] = filename
+            frames.append(frame)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{filename}: {exc}")
+    if not frames:
+        detail = "; ".join(errors) if errors else "no files provided"
+        raise ValueError(f"Could not load any statements. {detail}")
+    combined = pd.concat(frames, ignore_index=True)
+    combined = combined.sort_values("date").reset_index(drop=True)
+    combined.attrs["load_errors"] = errors
+    return combined

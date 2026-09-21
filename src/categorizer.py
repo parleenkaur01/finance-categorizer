@@ -25,6 +25,7 @@ KEYWORD_RULES: list[tuple[str, str]] = [
     ("UBER EATS", "Dining"),
     ("UBER *EATS", "Dining"),
     ("POKE BOWL", "Dining"),
+    ("NEUMOS", "Entertainment"),
     ("TST*", "Dining"),
     ("MCDONALD", "Dining"),
     ("IN-N-OUT", "Dining"),
@@ -33,8 +34,24 @@ KEYWORD_RULES: list[tuple[str, str]] = [
     ("OLIVE GARDEN", "Dining"),
     ("CAFE", "Dining"),
     ("COFFEE", "Dining"),
+    ("NESPRESSO", "Dining"),
     ("RESTAURANT", "Dining"),
     ("DINER", "Dining"),
+    ("BOMBAY", "Dining"),
+    ("CHAAT HOUSE", "Dining"),
+    ("CHAAT", "Dining"),
+    ("QDOBA", "Dining"),
+    ("CHILI'S", "Dining"),
+    ("CHILIS", "Dining"),
+    ("SEATTLE BEER", "Dining"),
+    ("TACOS EL GORDO", "Dining"),
+    ("EL GORDO", "Dining"),
+    ("TACOS", "Dining"),
+    ("TACO", "Dining"),
+    ("PHO SHIZZLE", "Dining"),
+    ("PHO SIZZLE", "Dining"),
+    ("PHO ", "Dining"),
+    ("CAVA", "Dining"),
     # Groceries
     ("TRADER JOE", "Groceries"),
     ("WHOLE FOODS", "Groceries"),
@@ -47,18 +64,27 @@ KEYWORD_RULES: list[tuple[str, str]] = [
     ("VONS", "Groceries"),
     ("RALPHS", "Groceries"),
     ("SPROUTS", "Groceries"),
+    ("H&M", "Shopping"),
+    ("PACSUN", "Shopping"),
     ("H MART", "Groceries"),
+    ("QFC", "Groceries"),
+    ("WALMART", "Groceries"),
+    ("WAL-MART", "Groceries"),
     ("GROCERY", "Groceries"),
     ("INDIAN SPICES", "Groceries"),
+    ("AZTEC MARKET", "Groceries"),
+    ("INSTACART", "Groceries"),
     # Transport / travel
     ("ALASKA AIR", "Transport"),
     ("ALASKA AIRLINES", "Transport"),
+    ("DELTA AIR", "Transport"),
     ("DELTA.COM", "Transport"),
     ("SOUTHWEST", "Transport"),
     ("UNITED AIR", "Transport"),
     ("UBER TRIP", "Transport"),
     ("UBER *TRIP", "Transport"),
     ("LYFT", "Transport"),
+    ("LIME", "Transport"),
     ("AMTRAK", "Transport"),
     ("HERTZ", "Transport"),
     ("ARCO", "Transport"),
@@ -66,11 +92,13 @@ KEYWORD_RULES: list[tuple[str, str]] = [
     ("CHEVRON", "Transport"),
     ("EXXON", "Transport"),
     ("MTS PRONTO", "Transport"),
+    ("SEATTLE MONORAIL", "Transport"),
     ("METRO TRANSIT", "Transport"),
     ("BART CLIPPER", "Transport"),
     ("GAS STATION", "Transport"),
     ("ZIPCAR", "Transport"),
     ("PARKING GARAGE", "Transport"),
+    ("GARAGE SAN DIEGO", "Transport"),
     ("PARKING", "Transport"),
     # Shopping (Amazon marketplace before generic Amazon)
     ("AMAZON PRIME", "Subscriptions"),
@@ -83,7 +111,6 @@ KEYWORD_RULES: list[tuple[str, str]] = [
     ("CVS", "Shopping"),
     ("PHARMACY", "Shopping"),
     ("TARGET", "Shopping"),
-    ("WALMART", "Shopping"),
     ("BEST BUY", "Shopping"),
     ("HOME DEPOT", "Shopping"),
     ("TJ MAXX", "Shopping"),
@@ -94,6 +121,11 @@ KEYWORD_RULES: list[tuple[str, str]] = [
     ("REI CO-OP", "Shopping"),
     ("SHOPCIDER", "Shopping"),
     ("CIDER.COM", "Shopping"),
+    ("ZARA", "Shopping"),
+    ("PACSUN", "Shopping"),
+    ("PAC SUN", "Shopping"),
+    ("H&M", "Shopping"),
+    ("H AND M", "Shopping"),
     # Subscriptions
     ("NETFLIX", "Subscriptions"),
     ("ADOBE", "Subscriptions"),
@@ -106,6 +138,10 @@ KEYWORD_RULES: list[tuple[str, str]] = [
     ("YOUTUBE PREMIUM", "Subscriptions"),
     ("CURSOR.COM", "Subscriptions"),
     ("CURSOR", "Subscriptions"),
+    ("ANTHROPIC", "Subscriptions"),
+    ("CLAUDE SUB", "Subscriptions"),
+    ("PERPLEXIT", "Subscriptions"),
+    ("RAILWAY", "Subscriptions"),
     ("AUDIBLE", "Subscriptions"),
     ("DROPBOX", "Subscriptions"),
     ("PATREON", "Subscriptions"),
@@ -127,7 +163,8 @@ KEYWORD_RULES: list[tuple[str, str]] = [
     ("ESCAPE ROOM", "Entertainment"),
     ("TOP GOLF", "Entertainment"),
     ("SIX FLAGS", "Entertainment"),
-    # Utilities
+    ("WATERFRONT", "Entertainment"),
+    # Utilities — keep AT&T as a literal (compact "ATT" matches SEATTLE).
     ("WASTE MGMT", "Utilities"),
     ("AT&T", "Utilities"),
     ("COMCAST", "Utilities"),
@@ -159,6 +196,8 @@ KEYWORD_RULES: list[tuple[str, str]] = [
     ("FOREIGN TXN FEE", "Other"),
     ("BANK MAINTENANCE", "Other"),
     ("PDF.NET", "Other"),
+    ("UPS STORE", "Other"),
+    ("ROBINHOOD", "Other"),
 ]
 
 
@@ -171,7 +210,13 @@ def match_keyword_category(description: str) -> str | None:
     text = str(description).upper()
     compact_text = _compact(text)
     for keyword, category in KEYWORD_RULES:
-        if keyword.upper() in text or _compact(keyword) in compact_text:
+        needle = keyword.upper()
+        compact_kw = _compact(keyword)
+        if needle in text:
+            return category
+        # Compact match is for glued PDF tokens (ALASKAAIR). Short
+        # fragments like ATT (from AT&T) otherwise hit SEATTLE.
+        if len(compact_kw) >= 5 and compact_kw in compact_text:
             return category
     return None
 
