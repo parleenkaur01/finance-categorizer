@@ -27,13 +27,17 @@ def main() -> None:
     df = pd.concat(frames, ignore_index=True)
     df["category"] = df["description"].map(match_keyword_category)
     unlabeled = df[df["category"].isna()]
+    labeled = df[df["category"].notna()]
     if not unlabeled.empty:
-        print("\nUnlabeled merchants (need a keyword rule):")
+        print("\nSkipping unlabeled merchants (no keyword rule yet):")
         for desc in sorted(unlabeled["description"].unique()):
             print(f"  {desc}")
-        raise SystemExit("Label every real merchant before training.")
+        print(f"({len(unlabeled)} of {len(df)} rows skipped)")
 
-    out = df[["date", "description", "amount", "category"]].copy()
+    if labeled.empty:
+        raise SystemExit("No labeled rows to write. Add a keyword rule and re-run.")
+
+    out = labeled[["date", "description", "amount", "category"]].copy()
     out["date"] = pd.to_datetime(out["date"]).dt.strftime("%Y-%m-%d")
     out.to_csv(OUTPUT_PATH, index=False)
 
