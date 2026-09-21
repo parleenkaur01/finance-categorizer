@@ -199,6 +199,31 @@ else:
 
 # Anomaly detection uses `category` (true labels if present, else predictions).
 df = detect_anomalies(df)
+if "is_amount_anomaly" not in df.columns:
+    df["is_amount_anomaly"] = False
+if "is_new_merchant" not in df.columns:
+    df["is_new_merchant"] = False
+df["is_anomaly"] = df["is_new_merchant"].fillna(False) | df[
+    "is_amount_anomaly"
+].fillna(False)
+if "anomaly_reason" not in df.columns:
+    df["anomaly_reason"] = ""
+missing_why = df["is_anomaly"] & df["anomaly_reason"].astype(str).str.strip().eq("")
+if missing_why.any():
+    df.loc[missing_why, "anomaly_reason"] = [
+        "; ".join(
+            part
+            for part, flag in (
+                ("First time seeing this merchant", is_new),
+                ("Unusually high for this category", is_high),
+            )
+            if flag
+        )
+        for is_new, is_high in zip(
+            df.loc[missing_why, "is_new_merchant"],
+            df.loc[missing_why, "is_amount_anomaly"],
+        )
+    ]
 
 st.success(f"Loaded **{len(df)}** transactions from `{source_label}`.")
 if load_warnings:
@@ -228,12 +253,12 @@ period_caption = (
 expenses = cat_df.loc[cat_df["amount"] < 0, "amount"].abs().sum()
 refunds = refunds_only(cat_df)
 refunds_total = float(refunds["amount"].sum()) if not refunds.empty else 0.0
-n_anom = int(cat_df["is_amount_anomaly"].sum())
+n_anom = int(cat_df["is_anomaly"].sum())
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Transactions", f"{len(cat_df)}")
 c2.metric("Total spending", f"${expenses:,.2f}")
 c3.metric("Refunds", money(refunds_total))
-c4.metric("Unusual purchases", f"{n_anom}")
+c4.metric("Flagged purchases", f"{n_anom}")
 st.caption(f"Totals for {period_caption}.")
 
 with st.expander(
@@ -301,10 +326,13 @@ else:
     st.write("No expense rows to chart.")
 
 with st.expander("Anomalies"):
-    st.subheader("Unusual purchases")
-    anom = cat_df[cat_df["is_amount_anomaly"]].sort_values("amount")
+    st.subheader("Flagged purchases")
+    st.caption(
+        "First time seeing this merchant, or unusually high for this category."
+    )
+    anom = cat_df[cat_df["is_anomaly"]].sort_values("date", ascending=False)
     if anom.empty:
-        st.write("No purchases over the category limits.")
+        st.write("No first-time or unusually high purchases in this period.")
     else:
         anom_show = anom[
             ["date", "description", "category", "amount", "anomaly_reason"]
