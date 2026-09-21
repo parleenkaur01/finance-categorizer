@@ -6,10 +6,11 @@ import pandas as pd
 import streamlit as st
 
 from src.anomaly import detect_anomalies
-from src.loaders import load_transactions_upload
+from src.loaders import load_transactions_uploads
 from src.predict import MODEL_PATH, categorize_transactions, load_model
 
-SAMPLE_PDF_HINT = "Upload a bank/credit statement (.csv or .pdf)"
+SAMPLE_PDF_HINT = "Upload one or more bank/credit statements (.csv or .pdf)"
+ALL_MONTHS_LABEL = "Full year"
 
 
 st.set_page_config(
@@ -24,6 +25,22 @@ st.title("AI-Powered Personal Finance Tracker")
 @st.cache_resource
 def get_model(mtime: float):
     return load_model()
+
+
+def month_choices(df: pd.DataFrame) -> list[tuple[str, str]]:
+    """Return (label, period-key) options, with full-year first."""
+    periods = sorted(pd.to_datetime(df["date"]).dt.to_period("M").unique())
+    choices = [(ALL_MONTHS_LABEL, ALL_MONTHS_LABEL)]
+    for period in periods:
+        choices.append((period.strftime("%B %Y"), str(period)))
+    return choices
+
+
+def filter_by_month(df: pd.DataFrame, period_key: str) -> pd.DataFrame:
+    if period_key == ALL_MONTHS_LABEL:
+        return df
+    months = pd.to_datetime(df["date"]).dt.to_period("M").astype(str)
+    return df.loc[months == period_key].copy()
 
 
 def spending_by_category(df: pd.DataFrame) -> pd.DataFrame:
@@ -134,18 +151,27 @@ with st.sidebar:
     uploaded = st.file_uploader(
         SAMPLE_PDF_HINT,
         type=["csv", "pdf"],
+        accept_multiple_files=True,
         help="CSV needs date / description / amount columns. "
-        "PDFs: Robinhood-style statements with Tran/Post date rows.",
+        "PDFs: Robinhood-style statements with Tran/Post date rows. "
+        "You can select several files at once.",
     )
 
 df = None
 source_label = None
 error = None
+load_warnings: list[str] = []
 
 try:
-    if uploaded is not None:
-        df = load_transactions_upload(uploaded.name, uploaded.getvalue())
-        source_label = uploaded.name
+    if uploaded:
+        files = [(item.name, item.getvalue()) for item in uploaded]
+        df = load_transactions_uploads(files)
+        names = [item.name for item in uploaded]
+        if len(names) == 1:
+            source_label = names[0]
+        else:
+            source_label = f"{len(names)} files ({', '.join(names)})"
+        load_warnings = list(df.attrs.get("load_errors") or [])
 except Exception as exc:  # noqa: BLE001 — surface parse errors in UI
     error = str(exc)
 
@@ -154,7 +180,7 @@ if error:
     st.stop()
 
 if df is None or df.empty:
-    st.info("Upload a `.csv` or `.pdf` statement to get started.")
+    st.info("Upload one or more `.csv` or `.pdf` statements to get started.")
     st.stop()
 
 model = get_model(MODEL_PATH.stat().st_mtime)
@@ -175,36 +201,63 @@ else:
 df = detect_anomalies(df)
 
 st.success(f"Loaded **{len(df)}** transactions from `{source_label}`.")
+if load_warnings:
+    st.warning("Some files could not be loaded:\n\n" + "\n".join(f"- {w}" for w in load_warnings))
 
-# KPI row
-expenses = df.loc[df["amount"] < 0, "amount"].abs().sum()
-refunds = refunds_only(df)
+choices = month_choices(df)
+labels = [label for label, _key in choices]
+selected_label = st.selectbox(
+    "Month",
+    labels,
+    index=0,
+    help="Full year shows all uploaded statements. Pick a month to update totals and categories.",
+)
+selected_key = dict(choices)[selected_label]
+if st.session_state.get("category_month") != selected_key:
+    st.session_state["category_month"] = selected_key
+    st.session_state.pop("picked_category", None)
+
+cat_df = filter_by_month(df, selected_key)
+period_caption = (
+    "Full year"
+    if selected_key == ALL_MONTHS_LABEL
+    else selected_label
+)
+
+# KPI row — follows the selected month
+expenses = cat_df.loc[cat_df["amount"] < 0, "amount"].abs().sum()
+refunds = refunds_only(cat_df)
 refunds_total = float(refunds["amount"].sum()) if not refunds.empty else 0.0
-n_anom = int(df["is_amount_anomaly"].sum())
+n_anom = int(cat_df["is_amount_anomaly"].sum())
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("Transactions", f"{len(df)}")
+c1.metric("Transactions", f"{len(cat_df)}")
 c2.metric("Total spending", f"${expenses:,.2f}")
 c3.metric("Refunds", money(refunds_total))
 c4.metric("Unusual purchases", f"{n_anom}")
+st.caption(f"Totals for {period_caption}.")
 
 with st.expander(
     f"Refunds  ·  {money(refunds_total)}  ·  "
     f"{len(refunds)} item{'s' if len(refunds) != 1 else ''}"
 ):
     if refunds.empty:
-        st.caption("No refunds in this statement.")
+        st.caption("No refunds in this period.")
     else:
         render_credits(refunds)
 
 if labeled:
-    acc = df["correct"].mean()
+    acc = cat_df["correct"].mean() if not cat_df.empty else 0.0
     st.metric("Model accuracy vs file labels", f"{acc:.1%}")
 
 st.subheader("Spending by category")
-st.caption("Click a category to see every purchase.")
-by_cat = spending_by_category(df)
+if selected_key == ALL_MONTHS_LABEL:
+    st.caption("Full year — click a category to see every purchase.")
+else:
+    st.caption(f"{selected_label} — click a category to see purchases from this month.")
+
+by_cat = spending_by_category(cat_df)
 if by_cat.empty:
-    st.write("No purchases to chart.")
+    st.write("No purchases to chart for this period.")
 else:
     pick = alt.selection_point(fields=["category"], name="pick")
     chart = (
@@ -231,7 +284,7 @@ else:
     for _, row in by_cat.iterrows():
         category = row["category"]
         spent = float(row["spend"])
-        purchases = expenses_only(df)
+        purchases = expenses_only(cat_df)
         purchases = purchases[purchases["category"] == category]
         label = f"{category}  ·  {money(spent)}  ·  {len(purchases)} purchase{'s' if len(purchases) != 1 else ''}"
         with st.expander(label, expanded=(selected == category)):
@@ -249,7 +302,7 @@ else:
 
 with st.expander("Anomalies"):
     st.subheader("Unusual purchases")
-    anom = df[df["is_amount_anomaly"]].sort_values("amount")
+    anom = cat_df[cat_df["is_amount_anomaly"]].sort_values("amount")
     if anom.empty:
         st.write("No purchases over the category limits.")
     else:
