@@ -8,3 +8,4 @@ __pycache__/
 .ipynb_checkpoints/
 .streamlit/secrets.toml
 data/real_bank.csv
+data/statements/

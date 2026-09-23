@@ -5,9 +5,16 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
+import importlib
+from pathlib import Path
+
 from src.anomaly import detect_anomalies
 from src.loaders import load_transactions_uploads
-from src.predict import MODEL_PATH, categorize_transactions, load_model
+from src.predict import MODEL_PATH, load_model
+from src import categorizer as categorizer_mod
+from src import predict as predict_mod
+
+RULES_PATH = Path(__file__).resolve().parent / "src" / "categorizer.py"
 
 SAMPLE_PDF_HINT = "Upload one or more bank/credit statements (.csv or .pdf)"
 ALL_MONTHS_LABEL = "Full year"
@@ -23,7 +30,10 @@ st.title("AI-Powered Personal Finance Tracker")
 
 
 @st.cache_resource
-def get_model(mtime: float):
+def get_model(mtime: float, rules_mtime: float):
+    # Reload rules so keyword fixes apply without a full server restart.
+    importlib.reload(categorizer_mod)
+    importlib.reload(predict_mod)
     return load_model()
 
 
@@ -183,18 +193,18 @@ if df is None or df.empty:
     st.info("Upload one or more `.csv` or `.pdf` statements to get started.")
     st.stop()
 
-model = get_model(MODEL_PATH.stat().st_mtime)
+model = get_model(MODEL_PATH.stat().st_mtime, RULES_PATH.stat().st_mtime)
 # If the file already has labels (sample data), keep them for comparison,
 # but still run the model into predicted_category.
 labeled = "category" in df.columns
 if labeled:
     truth = df["category"].copy()
-    df = categorize_transactions(df.drop(columns=["category"]), model=model)
+    df = predict_mod.categorize_transactions(df.drop(columns=["category"]), model=model)
     df = df.rename(columns={"category": "predicted_category"})
     df["category"] = truth
     df["correct"] = df["predicted_category"] == df["category"]
 else:
-    df = categorize_transactions(df, model=model)
+    df = predict_mod.categorize_transactions(df, model=model)
     df["predicted_category"] = df["category"]
 
 # Anomaly detection uses `category` (true labels if present, else predictions).

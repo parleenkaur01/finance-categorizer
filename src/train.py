@@ -16,6 +16,7 @@ from sklearn.pipeline import FeatureUnion, Pipeline
 
 from src.features import normalize_description
 from src.parser import load_transactions
+from src.predict import predict_categories
 
 DATA_PATH = "data/real_transactions.csv"
 MODEL_PATH = "src/model.pkl"
@@ -88,29 +89,40 @@ def main():
 
     pipeline = build_pipeline()
     pipeline.fit(X_train, y_train)
-    y_pred = pipeline.predict(X_test)
+    y_pred_ml = pd.Series(pipeline.predict(X_test), index=X_test.index)
+    # Same path as the dashboard: keyword rules win, then the model.
+    y_pred = predict_categories(X_test, model=pipeline)
 
+    ml_accuracy = (y_pred_ml == y_test).mean()
     accuracy = (y_pred == y_test).mean()
-    print(f"Test accuracy: {accuracy:.4f}\n")
-    print("Classification report:")
+    print(f"ML-only test accuracy: {ml_accuracy:.4f}")
+    print(f"Hybrid test accuracy (rules + model): {accuracy:.4f}\n")
+    print("Classification report (hybrid):")
     print(classification_report(y_test, y_pred, zero_division=0))
 
     labels = sorted(y.unique())
-    print("Confusion matrix (rows=true, cols=predicted):")
+    print("Confusion matrix (rows=true, cols=predicted, hybrid):")
     cm = confusion_matrix(y_test, y_pred, labels=labels)
     print(pd.DataFrame(cm, index=labels, columns=labels))
     print()
 
     misclassified = X_test[y_test != y_pred].to_frame()
     misclassified["true_category"] = y_test[y_test != y_pred]
-    misclassified["predicted_category"] = pd.Series(y_pred, index=y_test.index)[
-        y_test != y_pred
-    ]
-    print("Misclassified rows:")
+    misclassified["predicted_category"] = y_pred[y_test != y_pred]
+    print("Misclassified rows (hybrid):")
     if misclassified.empty:
         print("(none)")
     else:
         print(misclassified.to_string())
+
+    ml_misses = X_test[y_test != y_pred_ml].to_frame()
+    ml_misses["true_category"] = y_test[y_test != y_pred_ml]
+    ml_misses["ml_predicted"] = y_pred_ml[y_test != y_pred_ml]
+    print("\nML-only misses (corrected by keyword rules when listed as hybrid none):")
+    if ml_misses.empty:
+        print("(none)")
+    else:
+        print(ml_misses.to_string())
 
     final_pipeline = build_pipeline()
     final_pipeline.fit(X, y)

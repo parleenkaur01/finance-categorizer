@@ -14,9 +14,17 @@ STATES = (
     "PA|RI|SC|SD|TN|TX|UT|VA|VT|WA|WI|WV|WY"
 )
 
+# Only 1–2 tokens before the state (SAN DIEGO CA, NEW YORK NY).
+# {1,4} was too greedy: "SAN DIEGO INDIAN SPICES SAN DIEGO CA"
+# became "SAN DIEGO" because INDIAN SPICES SAN DIEGO + CA matched.
 _TRAILING_LOCATION = re.compile(
-    rf"(?:\s+[A-Z][A-Z0-9'&.-]{{1,24}}){{1,4}}\s+(?:{STATES})\b"
+    rf"(?:\s+[A-Z][A-Z0-9'&.-]{{1,24}}){{1,2}}\s+(?:{STATES})\b"
     r"(?:\s+\d{5}(?:-\d{4})?)?\s*$",
+    re.IGNORECASE,
+)
+_KNOWN_CITIES = re.compile(
+    r"\b(?:SAN DIEGO|SAN FRANCISCO|LOS ANGELES|NEW YORK|SEATTLE|"
+    r"SAN JOSE|FASHION VALLEY)\b",
     re.IGNORECASE,
 )
 _PHONE = re.compile(r"\b\d{3}[\s.-]?\d{3}[\s.-]?\d{4}\b|\b\d{10,}\b")
@@ -35,6 +43,7 @@ def normalize_description(text: str) -> str:
         if stripped == value:
             break
         value = stripped
+    value = _KNOWN_CITIES.sub(" ", value)
     value = _PHONE.sub(" ", value)
     value = _STORE_NUM.sub(" ", value)
     value = _PUNCT.sub(" ", value)
